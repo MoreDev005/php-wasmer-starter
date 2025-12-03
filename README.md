@@ -1,36 +1,30 @@
-This is a simple [PHP](https://php.org/) application starter
+# PHP Basic Starter + Wasmer
 
-## Getting Started
+This example shows how to run a bare-bones **PHP** script on **Wasmer Edge** using the built-in development server.
 
-Modify the logic of your the PHP application in the `app/index.php` file.
+## Demo
 
-```console
-$ echo '<?php phpinfo() ?>' > ./app/index.php
-```
+`https://<your-subdomain>.wasmer.app/` (deploy to get your own URL)
 
-You can run things locally with:
+## How it Works
 
-```
-$ php -t app -S localhost:8080
-```
+The entrypoint `app/index.php` is intentionally simple:
 
-Or you can also use `wasmer run` to run it locally (check out the [Wasmer install guide](https://docs.wasmer.io/install)):
+* Builds an associative array containing a greeting, a few numbers, and `phpversion()`.
+* Iterates over the array, printing each key/value pair with tab separators.
 
-```console
-$ wasmer run .
-```
+Swap this logic for your own endpoints or templates—Wasmer simply executes the PHP script for each request.
 
-Open [http://localhost:8080](http://localhost:8080) with your browser to see the result.
-
-
-## Deploy on Wasmer Edge
-
-The easiest way to deploy your PHP app is to use the [Wasmer Edge](https://wasmer.io/products/edge).
-
-Live example: https://php-starter-wasmer-examples.wasmer.app/
-
-Run this commmand to deploy to Wasmer Edge:
+## Running Locally
 
 ```bash
-wasmer deploy
+php -t app -S 127.0.0.1:8080
 ```
+
+Visit `http://127.0.0.1:8080/` to see the sample output. Edit `app/index.php` and reload the page to test changes.
+
+## Deploying to Wasmer (Overview)
+
+1. Package the `app/` directory (and any additional PHP files) with your deployment.
+2. Configure the start command to serve the directory, e.g. `php -t app -S 0.0.0.0:$PORT`.
+3. Deploy to Wasmer Edge and open `https://<your-subdomain>.wasmer.app/`.
